@@ -43,28 +43,32 @@ class AgentPER():
         # set parameter for ML
         self.set_parameters(gamma, tau, LR, batch_size)
         # Q-Network
-        self.create_qnetworks
+        self.create_qnetworks(seed)
         # Replay memory
-        self.create_ReplayBuffer(alpha, beta, EMIN)
+        self.create_ReplayBuffer(buffer_size, alpha, beta, EMIN, seed)
         # Initialize time step (for updating every UPDATE_EVERY steps)
         self.t_step = 0
         
-    def set_parameters(self, gamma, tau, LR, batch_size)
+    def set_parameters(self, gamma, tau, LR, batch_size):
+        # Base agent parameters
         self.gamma = gamma
         self.tau = tau
         self.LR = LR 
         self.batch_size = batch_size
+        # Some debug flags
+        self.DebugSample = False
         
-    def create_qnetworks(self)
-        self.qnetwork_local = QNetwork(state_size, action_size, seed).to(device)
-        self.qnetwork_target = QNetwork(state_size, action_size, seed).to(device)
+    def create_qnetworks(self, seed):
+        self.qnetwork_local = QNetwork(self.state_size, self.action_size, seed).to(device)
+        self.qnetwork_target = QNetwork(self.state_size, self.action_size, seed).to(device)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=self.LR)
         
-    def create_ReplayBuffer(self, alpha, beta, emin)
+    def create_ReplayBuffer(self, buffer_size, alpha, beta, emin, seed):
         self.alpha = alpha
         self.beta = beta
         self.emin = EMIN
-        self.memory = ReplayBuffer(action_size, buffer_size, batch_size, self.alpha, self.emin, seed)
+        self.buffer_size = buffer_size
+        self.memory = ReplayBuffer(self.action_size, buffer_size, self.batch_size, alpha, emin, seed)
     
     def getdeltaQ(self, state, action, reward, next_state, done):
         """ Get difference between Q_target and Q_expected as in target and local """
@@ -72,7 +76,7 @@ class AgentPER():
 
         # print('GetdeltaQ : type(state) : ',type(state))
 
-        # Cast to torch if inputted as numpy
+        # Cast to tensor if inputted as numpy
         if type(state) is np.ndarray:
             # print('Is numpy, casting types')
             state = torch.from_numpy(state).float().unsqueeze(0).to(device) 
@@ -101,15 +105,11 @@ class AgentPER():
     def step(self, state, action, reward, next_state, done):
         """Proceeds all variable for doing an agents step"""
         """ state, action ..  as [numpy.Variable]): (s, a, r, s', done) """
-        DebugSample = False
         
         # Get Q-changes(deltaQ) to store in replay memory to prioritize through those
         deltaQ = self.getdeltaQ(state, action, reward, next_state, done)
-        if abs(deltaQ) < self.emin:
-            print('-----------------------------------------')
-            print('step : abs(deltaQ) < emin, this should not happen')
-            print('-----------------------------------------')
-            print(deltaQ)
+
+        self.check_Q_larger_emin(deltaQ, 'step')
         
         # Save experience in replay memory
         self.memory.add(state, action, reward, next_state, deltaQ, done)
@@ -122,29 +122,31 @@ class AgentPER():
                 if DOPER:
                     experiences,exp_indices,probs = self.memory.sample()
                     states, actions, rewards, next_states, deltaQs, dones = experiences
+                    self.DebugSampleStep(deltaQs, exp_indices, probs)
                 else:
-                    # ERexperiences,ERexp_indices = self.memory.ERsample()
-                    # ERstates, ERactions, ERrewards, ERnext_states, ERdeltaQs, ERdones = ERexperiences
                     experiences,exp_indices,probs = self.memory.ERsample()
-                    states, actions, rewards, next_states, deltaQs, dones = experiences
+                    states, actions, rewards, next_states, deltaQs, dones = experiences                
+                    self.DebugSampleStep(deltaQs, exp_indices, probs)
 
-                    if DebugSample:
-                        deltaQnp = np.transpose(deltaQs.detach().numpy())
-                        print('Step: Sampled Indices and associated deltaQs:  (mean(deltaQ) = {:7.5f}|| mean(abs(deltaQ)) = {:7.5f}) '.format(np.mean(deltaQnp),np.mean(np.abs(deltaQnp))))
-                        print(exp_indices)
-                        print(deltaQnp)
-                        print('step probs : ')
-                        print('MinabsP : {:11.9f} MaxabsP : {:11.9f} and meanP = {:11.9f}'.format(min(abs(probs)),max(abs(probs)),np.mean(probs)))
-                        print(probs)
-                        # ERdeltaQnp = np.transpose(ERdeltaQs.detach().numpy())
-                        # print('Learn: Sampled Indices and associated deltaQs as in ER:  (mean(deltaQ) = {:7.5f}|| mean(abs(deltaQ)) = {:7.5f}) '.format(np.mean(ERdeltaQnp),np.mean(np.abs(ERdeltaQnp))))
-                        # print(ERexp_indices)
-                        # print(ERdeltaQnp)
-                    
                 self.learn(experiences,exp_indices, probs, self.gamma)
                 
         self.EndOfEpisode()
         
+    def DebugSampleStep(self, deltaQs, exp_indices, probs):
+        
+        if self.DebugSample:
+            deltaQnp = np.transpose(deltaQs.detach().numpy())
+            print('Step: Sampled Indices and associated deltaQs:  (mean(deltaQ) = {:7.5f}|| mean(abs(deltaQ)) = {:7.5f}) '.format(np.mean(deltaQnp),np.mean(np.abs(deltaQnp))))
+            print(exp_indices)
+            print(deltaQnp)
+            print('step probs : ')
+            print('MinabsP : {:11.9f} MaxabsP : {:11.9f} and meanP = {:11.9f}'.format(min(abs(probs)),max(abs(probs)),np.mean(probs)))
+            print(probs)
+            # ERdeltaQnp = np.transpose(ERdeltaQs.detach().numpy())
+            # print('Learn: Sampled Indices and associated deltaQs as in ER:  (mean(deltaQ) = {:7.5f}|| mean(abs(deltaQ)) = {:7.5f}) '.format(np.mean(ERdeltaQnp),np.mean(np.abs(ERdeltaQnp))))
+            # print(ERexp_indices)
+            # print(ERdeltaQnp)
+
     def EndOfEpisode(self):
         """" Take care of any end of Epsiode tasks 
              for now we will just update SumQ in memory which has some minor inaccuracies over time """
@@ -175,21 +177,21 @@ class AgentPER():
     def update_PER(self,experiences,exp_indices):
         """ Update experience in Replay Memory with new deltaQ """
         
-        # print('----------------------------')
-        # print('Updating PER')
-
         states, actions, rewards, next_states, deltaQs, dones = experiences
         NewQ = self.getdeltaQ(states, actions, rewards, next_states, dones)
-
-        if np.any(abs(NewQ) < self.emin):
-            print('-----------------------------------------')
-            print('update_PER : abs(NewQ) < emin, this should not happen')
-            print('-----------------------------------------')
-            print(NewQ)
-
+        
+        self.check_Q_larger_emin(NewQ, 'update_PER')
         self.memory.updatedeltaQ(NewQ,exp_indices)
         
         return
+    
+    def check_Q_larger_emin(self, Q, funcname):
+
+        if np.any(abs(Q) < self.emin):
+            print('-----------------------------------------')
+            print('{} : abs(NewQ) < emin, this should not happen'.format(funcname))
+            print('-----------------------------------------')
+            print(Q)
 
     def learn(self, experiences, exp_indices, probs, gamma):
         """Update value parameters using given batch of experience tuples.
@@ -201,8 +203,6 @@ class AgentPER():
         """
         printQs = False
         states, actions, rewards, next_states, deltaQs, dones = experiences
-
-        #print('Running Learn')
 
         # Get max predicted Q values (for next states) from target model
         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)
